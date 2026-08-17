@@ -1,219 +1,110 @@
 import discord
-from discord import app_commands
 from discord.ext import commands
-import os
+from discord import app_commands, ui, ButtonStyle
 from datetime import datetime
-
-# ─── CONFIG ───
-TESTER_ROLE_NAMES = ["Tester", "Testers", "Staff", "Admin", "Owner"]
-KITS = ["Sword", "Axe", "Mace", "UHC", "Nethpot", "Diapot", "DiaSMP", 
-        "Minecart", "NethSMP", "Shieldless UHC", "Spear", "Crystal", "Axe/Shield"]
-REGIONS = ["AS", "NA", "EU"]
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
-tree = bot.tree
+bot = commands.Bot(command_prefix="/", intents=intents)
+active_queue = {}
 
-# ─── STORAGE ───
-queues = {}       # {kit: [user1, user2, ...]}
-tickets = {}      # {channel_id: {"tester": tester_id, "player": player_id, "kit": kit}}
-
-# ─── PERMISSION CHECK ───
-def is_tester(interaction: discord.Interaction):
-    if not interaction.user.guild:
-        return False
-    role_names = [r.name for r in interaction.user.roles]
-    return any(r in role_names for r in TESTER_ROLE_NAMES)
-
-async def tester_only(interaction: discord.Interaction):
-    if not is_tester(interaction):
-        await interaction.response.send_message("❌ **Only Testers can use this command!**", ephemeral=True)
-        return False
-    return True
-
-# ─── ON READY ───
 @bot.event
 async def on_ready():
-    await tree.sync()
-    print(f"✅ Logged in as {bot.user} — ALL COMMANDS SYNCED!")
+    print(f"✅ LOGGED IN AS: {bot.user}")
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ SYNCED {len(synced)} COMMANDS")
+    except Exception as e:
+        print(f"❌ ERROR: {e}")
 
-# ─── 1️⃣ /startqueue ───
-@tree.command(name="startqueue", description="Start a queue for a kit")
-@app_commands.describe(kit="Choose a kit")
+@bot.tree.command(name="startqueue", description="Start test queue")
+@app_commands.checks.has_permissions(administrator=True)
 async def startqueue(interaction: discord.Interaction, kit: str):
-    if not await tester_only(interaction):
+    if kit in active_queue:
+        await interaction.response.send_message("❌ Queue already active!", ephemeral=True)
         return
-
-    if kit not in KITS:
-        return await interaction.response.send_message(f"❌ Invalid kit! Choose: {', '.join(KITS)}", ephemeral=True)
-
-    queues[kit] = []
-
-    embed = discord.Embed(title=f"🔔 {kit} Testing Queue — JOIN BELOW", color=discord.Color.gold())
-    embed.description = "Click **✅ Join** to enter queue\nClick **❌ Leave** to exit\n\n**Current Queue:**\n*Empty*"
-
-    class QueueView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-
-        @discord.ui.button(label="✅ Join", style=discord.ButtonStyle.green, custom_id=f"join_{kit}")
-        async def join_btn(self, i: discord.Interaction, b: discord.ui.Button):
-            if i.user.id in queues[kit]:
-                return await i.response.send_message("❌ You're already in queue!", ephemeral=True)
-            queues[kit].append(i.user.id)
-            await i.channel.send(f"✅ **{i.user.mention} joined the queue!**", delete_after=10)
-            await i.response.send_message(f"✅ You joined {kit} queue!", ephemeral=True)
-            await update_queue_display(i.channel, kit)
-
-        @discord.ui.button(label="❌ Leave", style=discord.ButtonStyle.red, custom_id=f"leave_{kit}")
-        async def leave_btn(self, i: discord.Interaction, b: discord.ui.Button):
-            if i.user.id not in queues[kit]:
-                return await i.response.send_message("❌ You're not in queue!", ephemeral=True)
-            queues[kit].remove(i.user.id)
-            await i.channel.send(f"👋 **{i.user.mention} left the queue!**", delete_after=10)
-            await i.response.send_message("👋 You left the queue.", ephemeral=True)
-            await update_queue_display(i.channel, kit)
-
-    async def update_queue_display(channel, kit):
-        qlist = queues.get(kit, [])
+    active_queue[kit] = []
+    embed = discord.Embed(title=f"📋 TEST QUEUE — {kit.upper()}", color=0xf5b83d)
+    embed.description = "No one in queue yet!"
+    view = ui.View(timeout=None)
+    
+    async def update_msg():
         desc = ""
-        if not qlist:
-            desc = "*Empty*"
+        if len(active_queue[kit]) > 0:
+            for i, u in enumerate(active_queue[kit], 1):
+                desc += f"{i}. {u.mention}\n"
         else:
-            for idx, uid in enumerate(qlist, 1):
-                desc += f"{idx}. <@{uid}>\n"
-        embed.description = f"Click **✅ Join** to enter queue\nClick **❌ Leave** to exit\n\n**Current Queue:**\n{desc}"
-        await channel.edit(embed=embed)
+            desc = "No one in queue yet!"
+        embed.description = desc
+        await msg.edit(embed=embed)
+    
+    class JoinBtn(ui.Button):
+        def __init__(self):
+            super().__init__(label="✅ JOIN", style=ButtonStyle.green)
+        async def callback(self, inter):
+            if inter.user in active_queue[kit]:
+                await inter.response.send_message("❌ Already in queue!", ephemeral=True)
+                return
+            active_queue[kit].append(inter.user)
+            await update_msg()
+            await inter.response.send_message("✅ Joined queue!", ephemeral=True)
+    
+    class LeaveBtn(ui.Button):
+        def __init__(self):
+            super().__init__(label="❌ LEAVE", style=ButtonStyle.red)
+        async def callback(self, inter):
+            if inter.user not in active_queue[kit]:
+                await inter.response.send_message("❌ Not in queue!", ephemeral=True)
+                return
+            active_queue[kit].remove(inter.user)
+            await update_msg()
+            await inter.response.send_message("✅ Left queue!", ephemeral=True)
+    
+    view.add_item(JoinBtn())
+    view.add_item(LeaveBtn())
+    await interaction.response.send_message(embed=embed, view=view)
+    msg = await interaction.original_response()
 
-    await interaction.response.send_message(embed=embed, view=QueueView())
-
-# ─── 2️⃣ /endqueue ───
-@tree.command(name="endqueue", description="Close the current queue")
-async def endqueue(interaction: discord.Interaction):
-    if not await tester_only(interaction):
-        return
-    queues.clear()
-    await interaction.response.send_message("🔒 **Queue Closed!**", ephemeral=False)
-
-# ─── 3️⃣ /nextplayer ───
-@tree.command(name="nextplayer", description="Move to next player in queue")
-async def nextplayer(interaction: discord.Interaction):
-    if not await tester_only(interaction):
-        return
-    if not queues:
-        return await interaction.response.send_message("❌ No active queue!", ephemeral=True)
-
-    kit = next(iter(queues.keys()))
-    if not queues[kit]:
-        return await interaction.response.send_message("❌ Queue is empty!", ephemeral=True)
-
-    first = queues[kit].pop(0)
-    await interaction.response.send_message(f"▶️ **Next Up: <@{first}> — {kit} Testing!**")
-
-# ─── 4️⃣ /create ───
-@tree.command(name="create", description="Create a test ticket channel")
-@app_commands.describe(user="Mention the player", kit="Choose a kit")
-async def create_ticket(interaction: discord.Interaction, user: discord.Member, kit: str):
-    if not await tester_only(interaction):
-        return
-
-    if kit not in KITS:
-        return await interaction.response.send_message(f"❌ Invalid kit! Choose: {', '.join(KITS)}", ephemeral=True)
-
-    channel_name = f"sts-{kit.lower().replace(' ', '-')}-{user.name}".replace("/", "-")
-
+@bot.tree.command(name="create", description="Create test ticket")
+@app_commands.checks.has_permissions(administrator=True)
+async def create(interaction: discord.Interaction, user: discord.Member, kit: str):
+    ch_name = f"sts-{kit}-{user.name[:8]}".lower()
     overwrites = {
         interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
-        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
         user: discord.PermissionOverwrite(view_channel=True, send_messages=True),
+        interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True)
     }
+    ch = await interaction.guild.create_text_channel(ch_name, overwrites=overwrites)
+    emb = discord.Embed(title="⚔️ TESTING", color=0xf5b83d)
+    emb.description = f"Tester: {interaction.user.mention}\nPlayer: {user.mention}\n\nEnjoy your testing!"
+    
+    class CloseBtn(ui.View):
+        @ui.button(label="🔒 CLOSE", style=ButtonStyle.danger)
+        async def close(self, inter, btn):
+            if inter.user != interaction.user:
+                await inter.response.send_message("❌ Only tester can close!", ephemeral=True)
+                return
+            await inter.channel.delete()
+    
+    await ch.send(f"{interaction.user.mention} {user.mention}", embed=emb, view=CloseBtn())
+    await interaction.response.send_message(f"✅ Created: {ch.mention}", ephemeral=True)
 
-    channel = await interaction.guild.create_text_channel(
-        name=channel_name,
-        overwrites=overwrites,
-        reason=f"Test Ticket — {kit}"
-    )
+@bot.tree.command(name="result", description="Submit test result")
+@app_commands.checks.has_permissions(administrator=True)
+async def result(interaction: discord.Interaction, player: discord.Member, tester: discord.Member, region: str, username: str, oldtier: str, nowtier: str):
+    emb = discord.Embed(title="🏆 TEST RESULT", color=0x2ecc71, timestamp=datetime.now())
+    emb.add_field(name="Player", value=player.mention, inline=True)
+    emb.add_field(name="Tester", value=tester.mention, inline=True)
+    emb.add_field(name="Region", value=region.upper(), inline=True)
+    emb.add_field(name="Username", value=f"`{username}`", inline=False)
+    emb.add_field(name="Old Tier", value=oldtier.upper(), inline=True)
+    emb.add_field(name="New Tier", value=nowtier.upper(), inline=True)
+    await interaction.response.send_message(embed=emb)
 
-    tickets[channel.id] = {
-        "tester": interaction.user.id,
-        "player": user.id,
-        "kit": kit
-    }
+# ===== YOUR TOKEN IS ALREADY HERE! ✅ =====
+TOKEN = "MTUzODUyNTY4ODM3MjUzNTI5Ng.GX-R-G.9B4XKtqiWPUf_Z8KQlnVF4U2qfHHaSAh9-GsIE"
 
-    class CloseView(discord.ui.View):
-        def __init__(self):
-            super().__init__(timeout=None)
-
-        @discord.ui.button(label="🔒 Close Testing", style=discord.ButtonStyle.danger, custom_id="close_ticket")
-        async def close_btn(self, i: discord.Interaction, b: discord.ui.Button):
-            ticket = tickets.get(i.channel.id)
-            if not ticket or i.user.id != ticket["tester"]:
-                return await i.response.send_message("❌ **Only the Tester can close this ticket!**", ephemeral=True)
-            await i.channel.delete(reason="Ticket Closed")
-
-    embed = discord.Embed(color=discord.Color.dark_theme())
-    embed.description = f"""
-{user.mention} Testing!
---------------------------------------------------------
-**Tester:** {interaction.user.mention}
-**Player:** {user.mention}
---------------------------------------------------------
-Please enjoy Your Testing And Have fun!
---------------------------------------------------------
-"""
-    await channel.send(embed=embed, view=CloseView())
-    await interaction.response.send_message(f"✅ Ticket Created! → {channel.mention}", ephemeral=True)
-
-# ─── 5️⃣ /result ───
-@tree.command(name="result", description="Post test results")
-@app_commands.describe(
-    player="Mention the player",
-    tester="Mention the tester",
-    region="Region",
-    username="Minecraft Username",
-    oldtier="Previous Tier",
-    nowtier="New Tier Earned"
-)
-async def result(
-    interaction: discord.Interaction,
-    player: discord.Member,
-    tester: discord.Member,
-    region: app_commands.Choice[str],
-    username: str,
-    oldtier: str,
-    nowtier: str
-):
-    if not await tester_only(interaction):
-        return
-
-    ticket = tickets.get(interaction.channel.id)
-    if not ticket:
-        return await interaction.response.send_message("❌ **No open ticket here! Use this command inside the player's ticket channel only.**", ephemeral=True)
-    if ticket["tester"] != interaction.user.id:
-        return await interaction.response.send_message("❌ **Only the assigned Tester can post results!**", ephemeral=True)
-
-    kit = ticket["kit"]
-    embed = discord.Embed(
-        title=f"🏆 {username}'s Test Results",
-        color=discord.Color.red(),
-        timestamp=datetime.utcnow()
-    )
-    embed.set_thumbnail(url=f"https://mc-heads.net/avatar/{username}/100.png")
-    embed.add_field(name="Tester", value=f"{tester.mention}", inline=False)
-    embed.add_field(name="Kit", value=kit, inline=False)
-    embed.add_field(name="Region", value=region.value, inline=False)
-    embed.add_field(name="Username", value=f"`{username}`", inline=False)
-    embed.add_field(name="Previous Tier", value=f"`{oldtier}`", inline=False)
-    embed.add_field(name="Rank Earned", value=f"`{nowtier}`", inline=False)
-
-    await interaction.response.send_message(embed=embed)
-
-# ─── RUN BOT ───
-TOKEN = os.getenv("BOT_TOKEN")
-if not TOKEN:
-    print("⚠️ BOT_TOKEN not found! Set it in Environment Variables.")
-else:
-    bot.run(TOKEN)
+bot.run(TOKEN)
+        
