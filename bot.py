@@ -104,7 +104,7 @@ async def result(interaction: discord.Interaction, player: discord.Member, teste
     await interaction.response.send_message(embed=emb)
 
 # ===== YOUR TOKEN IS ALREADY HERE! ✅ =====
-TOKEN = "MTUzODUyNTY4ODM3MjUzNTI5Ng.GX-R-G.9B4XKtqiWPUf_Z8KQlnVF4U2qfHHaSAh9-GsIE"
+TOKEN = "MTUzODUyNTY4ODM3MjUzNTI5Ng.GPKe8d.P7hchzpD1dcjugxNO44Uz7vFg_AbHVQLN0sqNQ"
 
 bot.run(TOKEN)
         
